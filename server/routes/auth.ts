@@ -1135,9 +1135,14 @@ authRoutes.post(
 
     // Validate that user meets required claims. Claims may hold any type
     // (boolean, string, array, etc.), so treat a claim as satisfied when it
-    // is present and not explicitly false or empty.
+    // is present and not explicitly false or empty. email_verified is
+    // special-cased because some providers serialize it as a string, where
+    // "false" would otherwise pass a generic truthiness check.
     const hasRequiredClaims = requiredClaims.every((claim) => {
       const value = fullUserInfo[claim];
+      if (claim === 'email_verified') {
+        return value === true || value === 'true';
+      }
       return value != null && value !== false && value !== '';
     });
 

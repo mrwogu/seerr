@@ -31,6 +31,43 @@ import { canMakePermissionsChange } from '.';
 
 const userSettingsRoutes = Router({ mergeParams: true });
 
+/**
+ * Counts the credentials the user can actually sign in with right now. A
+ * credential that exists but whose sign-in method is disabled is not usable,
+ * so it must not keep an unlink guard from blocking a lockout.
+ */
+const countUsableCredentials = (
+  user: User,
+  options?: { excludeLinkedAccountId?: number; ignoreMediaServer?: boolean }
+): number => {
+  const settings = getSettings();
+  let count = 0;
+
+  if (settings.main.localLogin && user.password) {
+    count += 1;
+  }
+
+  count += user
+    .getActiveLinkedAccounts()
+    .filter((a) => a.id !== options?.excludeLinkedAccountId).length;
+
+  if (settings.main.mediaServerLogin && !options?.ignoreMediaServer) {
+    const hasMediaServer =
+      (settings.main.mediaServerType === MediaServerType.PLEX &&
+        !!user.plexId) ||
+      ([MediaServerType.JELLYFIN, MediaServerType.EMBY].includes(
+        settings.main.mediaServerType
+      ) &&
+        !!user.jellyfinUserId);
+
+    if (hasMediaServer) {
+      count += 1;
+    }
+  }
+
+  return count;
+};
+
 userSettingsRoutes.get<{ id: string }, UserSettingsGeneralResponse>(
   '/main',
   isOwnProfileOrAdmin(),
@@ -345,7 +382,7 @@ userSettingsRoutes.delete<{ id: string }>(
         });
       }
 
-      if (!user.password && user.getActiveLinkedAccounts().length === 0) {
+      if (countUsableCredentials(user, { ignoreMediaServer: true }) === 0) {
         return res.status(400).json({
           message:
             'User does not have a local password or other linked account.',
@@ -501,7 +538,7 @@ userSettingsRoutes.delete<{ id: string }>(
         });
       }
 
-      if (!user.password && user.getActiveLinkedAccounts().length === 0) {
+      if (countUsableCredentials(user, { ignoreMediaServer: true }) === 0) {
         return res.status(400).json({
           message:
             'User does not have a local password or other linked account.',
@@ -638,7 +675,6 @@ userSettingsRoutes.delete<{ id: string; acctId: string }>(
   '/linked-accounts/:acctId',
   isOwnProfileOrAdmin(),
   async (req, res) => {
-    const settings = getSettings();
     const userRepository = getRepository(User);
     const linkedAccountsRepository = getRepository(LinkedAccount);
     const acctId = Number(req.params.acctId);
@@ -661,17 +697,9 @@ userSettingsRoutes.delete<{ id: string; acctId: string }>(
       });
     }
 
-    const remainingOidcCount = user
-      .getActiveLinkedAccounts()
-      .filter((a) => a.id !== acctId).length;
-    const hasMediaServer =
-      (settings.main.mediaServerType === MediaServerType.PLEX &&
-        !!user.plexId) ||
-      ([MediaServerType.JELLYFIN, MediaServerType.EMBY].includes(
-        settings.main.mediaServerType
-      ) &&
-        !!user.jellyfinUserId);
-    if (!user.password && remainingOidcCount === 0 && !hasMediaServer) {
+    if (
+      countUsableCredentials(user, { excludeLinkedAccountId: acctId }) === 0
+    ) {
       return res.status(400).json({
         message: 'User does not have a local password or other linked account.',
       });

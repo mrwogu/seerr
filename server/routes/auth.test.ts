@@ -1188,7 +1188,83 @@ describe('OpenID Connect', () => {
     });
   });
 
+  describe('required claims', function () {
+    afterEach(() => {
+      // hardReset() alone does not restore the original global fetch
+      fetchMock.unmockGlobal();
+      fetchMock.hardReset();
+    });
+
+    function setRequiredClaims(claims?: string) {
+      getSettings().oidc.providers[0].requiredClaims = claims;
+    }
+
+    it('rejects the callback when a required claim is missing', async function () {
+      setRequiredClaims('email_verified');
+
+      await setupFetchMock({ supportsPKCE: true });
+
+      const response = await performOidcCallback();
+
+      assert.strictEqual(response.status, 403);
+      assert.strictEqual(response.body.error, ApiErrorCode.Unauthorized);
+    });
+
+    it('rejects the callback when email_verified is the string "false"', async function () {
+      setRequiredClaims('email_verified');
+
+      await setupFetchMock({
+        supportsPKCE: true,
+        idTokenClaims: { email_verified: 'false' },
+        userinfoResponse: { ...DEFAULT_CLAIMS, email_verified: 'false' },
+      });
+
+      const response = await performOidcCallback();
+
+      assert.strictEqual(response.status, 403);
+      assert.strictEqual(response.body.error, ApiErrorCode.Unauthorized);
+    });
+
+    it('authorizes when email_verified is the string "true"', async function () {
+      setRequiredClaims('email_verified');
+
+      await setupFetchMock({
+        supportsPKCE: true,
+        idTokenClaims: { email_verified: 'true' },
+        userinfoResponse: { ...DEFAULT_CLAIMS, email_verified: 'true' },
+      });
+
+      const response = await performOidcCallback();
+
+      assert.strictEqual(response.status, 204);
+    });
+
+    it('authorizes when a non-boolean claim holds a truthy value', async function () {
+      setRequiredClaims('groups');
+
+      await setupFetchMock({
+        supportsPKCE: true,
+        idTokenClaims: { groups: ['users'] },
+        userinfoResponse: { ...DEFAULT_CLAIMS, groups: ['users'] },
+      });
+
+      const response = await performOidcCallback();
+
+      assert.strictEqual(response.status, 204);
+    });
+  });
+
   describe('error handling', function () {
+    beforeEach(async () => {
+      await setupFetchMock();
+    });
+
+    afterEach(() => {
+      // hardReset() alone does not restore the original global fetch
+      fetchMock.unmockGlobal();
+      fetchMock.hardReset();
+    });
+
     it('returns Unauthorized when OIDC login is disabled', async function () {
       const settings = getSettings();
       settings.main.oidcLogin = false;
@@ -1211,8 +1287,6 @@ describe('OpenID Connect', () => {
     });
 
     it('rejects callback when correlation cookies are missing', async function () {
-      await setupFetchMock();
-
       const callbackUrl = new URL(OIDC_REDIRECT_URL);
       callbackUrl.searchParams.set('code', '123456');
       callbackUrl.searchParams.set('state', 'somestate');
@@ -1231,8 +1305,6 @@ describe('OpenID Connect', () => {
     });
 
     it('rejects callback when only one correlation cookie is present', async function () {
-      await setupFetchMock();
-
       // Perform login to get only the state cookie
       const loginResponse = await request(app)
         .get('/auth/oidc/login/test')

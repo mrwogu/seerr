@@ -181,8 +181,12 @@ const OidcProviderModal = ({
 
           try {
             await axios.post('/api/v1/settings/oidc', {
+              // Filter out both the submitted slug and the original slug so
+              // editing a provider's slug replaces it instead of duplicating.
               providers: providers
-                .filter((p) => p.slug !== values.slug)
+                .filter(
+                  (p) => p.slug !== values.slug && p.slug !== provider?.slug
+                )
                 .concat(newProvider),
             });
             onSaved();

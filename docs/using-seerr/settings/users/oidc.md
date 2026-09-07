@@ -33,9 +33,12 @@ To set up OpenID Connect by hand instead, make the following updates:
 ```diff title="settings.json"
  {
    ...
--  "oidcLogin": false,
-+  "oidcLogin": true,
-   ...
+   "main": {
+     ...
+-    "oidcLogin": false,
++    "oidcLogin": true,
+     ...
+   },
    "oidc": {
 -    "providers": []
 +    "providers": [

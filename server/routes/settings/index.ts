@@ -85,6 +85,16 @@ settingsRoutes.post('/main', async (req, res) => {
   const settings = getSettings();
 
   settings.main = merge(settings.main, req.body);
+
+  // Enabling OIDC sign-in without any configured provider would leave the
+  // instance without a usable authentication method on the login page.
+  if (settings.main.oidcLogin && settings.oidc.providers.length === 0) {
+    return res.status(400).json({
+      message:
+        'At least one OpenID Connect provider must be configured while OpenID Connect sign-in is enabled.',
+    });
+  }
+
   await settings.save();
 
   return res.status(200).json(settings.main);

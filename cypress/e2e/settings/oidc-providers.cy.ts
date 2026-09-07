@@ -1,13 +1,15 @@
 describe('OpenID Connect Provider Settings', () => {
   beforeEach(() => {
     cy.loginAsAdmin();
+    // Keep OIDC sign-in disabled while the provider list is empty; the
+    // server rejects enabling sign-in without a configured provider.
+    cy.request('POST', '/api/v1/settings/main', { oidcLogin: false });
     cy.request('POST', '/api/v1/settings/oidc', { providers: [] });
-    cy.request('POST', '/api/v1/settings/main', { oidcLogin: true });
   });
 
   afterEach(() => {
-    cy.request('POST', '/api/v1/settings/oidc', { providers: [] });
     cy.request('POST', '/api/v1/settings/main', { oidcLogin: false });
+    cy.request('POST', '/api/v1/settings/oidc', { providers: [] });
   });
 
   it('shows the OpenID Connect login toggle and provider section', () => {
@@ -29,7 +31,7 @@ describe('OpenID Connect Provider Settings', () => {
 
     cy.get('#name').type('Keycloak');
     cy.get('#slug').should('have.value', 'keycloak');
-    cy.get('#issuerUrl').type('https://keycloak.example.com/realms/master/');
+    cy.get('#issuerUrl').type('https://keycloak.example.com/realms/master');
     cy.get('#clientId').type('seerr');
     cy.get('#clientSecret').type('SUPER_SECRET_STRING');
     cy.get('[data-testid=modal-ok-button]').click();
@@ -41,7 +43,9 @@ describe('OpenID Connect Provider Settings', () => {
       .its('body.providers')
       .should('have.length', 1);
 
-    // Public settings should now expose the provider
+    // Enable sign-in now that a provider exists, and verify the public
+    // settings expose it on the login page
+    cy.request('POST', '/api/v1/settings/main', { oidcLogin: true });
     cy.request('GET', '/api/v1/settings/public')
       .its('body.openIdProviders')
       .should('have.length', 1);
@@ -80,13 +84,50 @@ describe('OpenID Connect Provider Settings', () => {
       .should('eq', 'Authentik Prod');
   });
 
+  it('replaces a provider when its slug is edited', () => {
+    cy.request('POST', '/api/v1/settings/oidc', {
+      providers: [
+        {
+          slug: 'authentik',
+          name: 'Authentik',
+          issuerUrl: 'https://authentik.example.com/application/o/seerr/',
+          clientId: 'seerr',
+          clientSecret: 'SUPER_SECRET_STRING',
+        },
+      ],
+    });
+
+    cy.visit('/settings/users');
+
+    cy.get('button').contains('Edit').click();
+
+    cy.get('#slug').clear();
+    cy.get('#slug').type('authentik-prod');
+    cy.get('[data-testid=modal-ok-button]').click();
+
+    cy.get('[data-testid=modal-title]').should('not.exist');
+
+    // The provider was replaced under the new slug, not duplicated
+    cy.request('GET', '/api/v1/settings/oidc').then(({ body }) => {
+      expect(body.providers).to.have.length(1);
+      expect(body.providers[0].slug).to.eq('authentik-prod');
+    });
+  });
+
   it('deletes a provider', () => {
     cy.request('POST', '/api/v1/settings/oidc', {
       providers: [
         {
+          slug: 'keycloak',
+          name: 'Keycloak',
+          issuerUrl: 'https://keycloak.example.com/realms/master',
+          clientId: 'seerr',
+          clientSecret: 'SUPER_SECRET_STRING',
+        },
+        {
           slug: 'pocket-id',
           name: 'Pocket-ID',
-          issuerUrl: 'https://pocketid.example.com/',
+          issuerUrl: 'https://pocketid.example.com',
           clientId: 'seerr',
           clientSecret: 'SUPER_SECRET_STRING',
         },
@@ -97,16 +138,18 @@ describe('OpenID Connect Provider Settings', () => {
 
     cy.contains('Pocket-ID').should('exist');
 
-    // ConfirmButton requires a second click to confirm
-    cy.get('button').contains('Delete').click();
-    cy.get('button').contains('Are you sure?').click();
+    // Target the Pocket-ID row specifically; ConfirmButton requires a
+    // second click to confirm
+    cy.contains('li', 'Pocket-ID').as('pocketRow');
+    cy.get('@pocketRow').contains('button', 'Delete').click();
+    cy.get('@pocketRow').contains('button', 'Are you sure?').click();
 
     cy.contains('Pocket-ID').should('not.exist');
-    cy.contains('No OpenID Connect providers configured.').should('exist');
+    cy.contains('Keycloak').should('exist');
 
     cy.request('GET', '/api/v1/settings/oidc')
       .its('body.providers')
-      .should('have.length', 0);
+      .should('have.length', 1);
   });
 
   it('rejects duplicate provider slugs', () => {
@@ -115,7 +158,7 @@ describe('OpenID Connect Provider Settings', () => {
         {
           slug: 'keycloak',
           name: 'Keycloak',
-          issuerUrl: 'https://keycloak.example.com/realms/master/',
+          issuerUrl: 'https://keycloak.example.com/realms/master',
           clientId: 'seerr',
           clientSecret: 'SUPER_SECRET_STRING',
         },
@@ -127,7 +170,7 @@ describe('OpenID Connect Provider Settings', () => {
     cy.get('button').contains('Add Provider').click();
     cy.get('#name').type('Keycloak');
     cy.get('#slug').should('have.value', 'keycloak');
-    cy.get('#issuerUrl').type('https://keycloak.example.com/realms/master/');
+    cy.get('#issuerUrl').type('https://keycloak.example.com/realms/master');
     cy.get('#clientId').type('seerr');
     cy.get('#clientSecret').type('SUPER_SECRET_STRING');
 
@@ -149,5 +192,45 @@ describe('OpenID Connect Provider Settings', () => {
     cy.get('[data-testid=modal-ok-button]').click();
     cy.get('[data-testid=modal-title]').should('not.exist');
     cy.contains('Keycloak').should('exist');
+  });
+
+  it('rejects enabling OpenID Connect sign-in with no providers', () => {
+    cy.request({
+      method: 'POST',
+      url: '/api/v1/settings/main',
+      body: { oidcLogin: true },
+      failOnStatusCode: false,
+    })
+      .its('status')
+      .should('eq', 400);
+  });
+
+  it('rejects removing the last provider while OpenID Connect sign-in is enabled', () => {
+    cy.request('POST', '/api/v1/settings/oidc', {
+      providers: [
+        {
+          slug: 'keycloak',
+          name: 'Keycloak',
+          issuerUrl: 'https://keycloak.example.com/realms/master',
+          clientId: 'seerr',
+          clientSecret: 'SUPER_SECRET_STRING',
+        },
+      ],
+    });
+    cy.request('POST', '/api/v1/settings/main', { oidcLogin: true });
+
+    cy.request({
+      method: 'POST',
+      url: '/api/v1/settings/oidc',
+      body: { providers: [] },
+      failOnStatusCode: false,
+    })
+      .its('status')
+      .should('eq', 400);
+
+    // The provider list is unchanged after the rejected request
+    cy.request('GET', '/api/v1/settings/oidc')
+      .its('body.providers')
+      .should('have.length', 1);
   });
 });

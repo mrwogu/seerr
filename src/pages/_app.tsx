@@ -299,8 +299,10 @@ CoreApp.getInitialProps = async (initialProps) => {
 
         if (
           router.pathname.match(/(setup|login)/) &&
-          // if code is set, we are in the callback of an OpenID Connect flow
-          router.query.code == null
+          // if code or error is set, we are in the callback of an OpenID
+          // Connect flow and must stay on the route to handle the result
+          router.query.code == null &&
+          router.query.error == null
         ) {
           ctx.res.writeHead(307, {
             Location: '/',

@@ -1,5 +1,5 @@
 import { ApiErrorCode } from '@server/constants/error';
-import { getRepository } from '@server/datasource';
+import dataSource from '@server/datasource';
 import { LinkedAccount } from '@server/entity/LinkedAccount';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -20,7 +20,19 @@ const oidcProviderSchema = z.object({
       message: 'Slug must be alphanumeric (hyphens/underscores allowed).',
     }),
   name: z.string().trim().min(1, { message: 'Name is required.' }),
-  issuerUrl: z.url({ message: 'A valid issuer URL is required.' }),
+  // openid-client enforces HTTPS for discovery; HTTP issuers are only allowed
+  // for local development behind an explicit opt-in.
+  issuerUrl: z
+    .url({ message: 'A valid issuer URL is required.' })
+    .refine(
+      (url) =>
+        process.env.OIDC_ALLOW_INSECURE === 'true' ||
+        new URL(url).protocol === 'https:',
+      {
+        message:
+          'Issuer URL must use HTTPS (set OIDC_ALLOW_INSECURE=true only for local development).',
+      }
+    ),
   clientId: z.string().trim().min(1, { message: 'Client ID is required.' }),
   clientSecret: z.string().min(1, { message: 'Client secret is required.' }),
   logo: z
@@ -69,18 +81,42 @@ oidcRoutes.post('/', async (req, res, next) => {
     });
   }
 
+  // Deleting the last provider while OIDC sign-in is enabled would leave the
+  // instance with no usable OIDC authentication method.
+  if (settings.main.oidcLogin && bodyResult.data.providers.length === 0) {
+    return next({
+      status: 400,
+      message:
+        'At least one OpenID Connect provider is required while OpenID Connect sign-in is enabled. Disable OpenID Connect sign-in first.',
+    });
+  }
+
   settings.oidc.providers = bodyResult.data.providers;
-  await settings.save();
 
   // Linked accounts for providers that no longer exist cannot be used to
   // sign in, so clean them up instead of leaving orphaned rows behind.
-  const linkedAccountsRepository = getRepository(LinkedAccount);
+  // settings.save() writes the settings file while pruning touches the
+  // database: run the prune inside a transaction and save before committing,
+  // so a failed file write rolls back the deleted linked accounts instead of
+  // leaving orphaned rows behind.
   const slugs = settings.oidc.providers.map((p) => p.slug);
-  if (slugs.length === 0) {
-    await linkedAccountsRepository.clear();
-  } else {
-    await linkedAccountsRepository.delete({
-      provider: Not(In(slugs)),
+  try {
+    await dataSource.transaction(async (entityManager) => {
+      const linkedAccountsRepository =
+        entityManager.getRepository(LinkedAccount);
+      if (slugs.length === 0) {
+        await linkedAccountsRepository.clear();
+      } else {
+        await linkedAccountsRepository.delete({
+          provider: Not(In(slugs)),
+        });
+      }
+      await settings.save();
+    });
+  } catch (e) {
+    return next({
+      status: 500,
+      message: e instanceof Error ? e.message : 'Failed to save settings.',
     });
   }
 

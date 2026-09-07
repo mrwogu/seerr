@@ -51,6 +51,10 @@ const messages = defineMessages('components.Settings.SettingsUsers', {
   toastProviderDeleteFailure:
     'Something went wrong while deleting the provider.',
   atLeastOneAuth: 'At least one authentication method must be selected.',
+  oidcLoginRequiresProvider:
+    'At least one OpenID Connect provider must be configured when OpenID Connect sign-in is enabled.',
+  deleteLastProvider:
+    'Disable OpenID Connect sign-in before deleting the last provider.',
   newPlexLogin: 'Enable New {mediaServerName} Sign-In',
   newPlexLoginTip:
     'Allow {mediaServerName} users to sign in without first being imported',
@@ -102,6 +106,17 @@ const SettingsUsers = () => {
           message: intl.formatMessage(messages.atLeastOneAuth),
         });
       },
+    })
+    .test({
+      name: 'oidcLoginRequiresProvider',
+      test: function (values) {
+        if (!values.oidcLogin) return true;
+        if ((oidcSettings?.providers ?? []).length > 0) return true;
+        return this.createError({
+          path: 'oidcLogin',
+          message: intl.formatMessage(messages.oidcLoginRequiresProvider),
+        });
+      },
     });
 
   if (!data && !error) {
@@ -120,6 +135,16 @@ const SettingsUsers = () => {
   };
 
   const deleteProvider = async (provider: OidcProvider) => {
+    // The server rejects removing the last provider while OIDC sign-in is
+    // enabled; fail fast with a clearer message than the generic save error.
+    if (oidcSettings?.providers.length === 1 && data?.oidcLogin) {
+      addToast(intl.formatMessage(messages.deleteLastProvider), {
+        appearance: 'error',
+        autoDismiss: true,
+      });
+      return;
+    }
+
     try {
       await axios.post('/api/v1/settings/oidc', {
         providers: (oidcSettings?.providers ?? []).filter(
@@ -222,6 +247,9 @@ const SettingsUsers = () => {
                         <span className="error">
                           {errors['localLogin | mediaServerLogin'] as string}
                         </span>
+                      )}
+                      {typeof errors.oidcLogin === 'string' && (
+                        <span className="error">{errors.oidcLogin}</span>
                       )}
                     </span>
 

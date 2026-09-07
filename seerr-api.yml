@@ -2324,7 +2324,26 @@ paths:
               schema:
                 $ref: '#/components/schemas/OidcSettings'
         '400':
-          description: Invalid provider configuration (e.g. duplicate or malformed slugs)
+          description: >-
+            Invalid provider configuration (e.g. duplicate or malformed
+            slugs), or the last provider was removed while OpenID Connect
+            sign-in is enabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '500':
+          description: Failed to save settings or prune linked accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
   /settings/oidc/test:
     post:
       summary: Test OpenID Connect provider discovery
@@ -2404,6 +2423,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MainSettings'
+        '400':
+          description: >-
+            OpenID Connect sign-in was enabled without any configured
+            provider
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
   /settings/network:
     get:
       summary: Get network settings
